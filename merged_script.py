@@ -9,6 +9,7 @@ import datetime
 import shutil
 from pathlib import Path
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # For image handling (if needed for non-conversion operations)
 try:
@@ -20,7 +21,7 @@ except ImportError:
 # --------------------------
 # Logging Configuration
 # --------------------------
-logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(levelname)s")
 logger = logging.getLogger(__name__)
 
 # --------------------------
@@ -255,10 +256,14 @@ def process_file(file_path: Path, input_dir: Path, output_dir: Path) -> bool:
 
     return True
 
+# --------------------------
+# Processing Directory with Multi-threading
+# --------------------------
+
 
 def process_directory(input_dir: Path, output_dir: Path):
     """
-    Walks through input_dir recursively and processes each media file.
+    Walks through input_dir recursively and processes each media file using a thread pool.
     A final report is printed at the end.
     """
     total_files = 0
@@ -266,17 +271,33 @@ def process_directory(input_dir: Path, output_dir: Path):
     failed_files = []
     extension_map = defaultdict(int)
 
-    for root, dirs, files in os.walk(input_dir):
-        for fname in files:
-            file_path = Path(root) / fname
-            if file_path.suffix.lower() in SUPPORTED_MEDIA_EXTENSIONS:
-                total_files += 1
-                logger.info(f"Processing file: {file_path}")
-                if process_file(file_path, input_dir, output_dir):
+    # Use a controlled number of worker threads (e.g., 4)
+    max_workers = 4
+    futures = {}
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for root, dirs, files in os.walk(input_dir):
+            for fname in files:
+                file_path = Path(root) / fname
+                if file_path.suffix.lower() in SUPPORTED_MEDIA_EXTENSIONS:
+                    total_files += 1
+                    logger.info(f"Submitting file for processing: {file_path}")
+                    future = executor.submit(
+                        process_file, file_path, input_dir, output_dir)
+                    futures[future] = file_path
+
+        for future in as_completed(futures):
+            file_path = futures[future]
+            try:
+                success = future.result()
+                ext = file_path.suffix.lower()
+                if success:
                     processed_files += 1
-                    extension_map[file_path.suffix.lower()] += 1
+                    extension_map[ext] += 1
                 else:
                     failed_files.append(str(file_path))
+            except Exception as exc:
+                logger.error(f"Error processing {file_path}: {exc}")
+                failed_files.append(str(file_path))
 
     # Generate a final report.
     report_lines = [
